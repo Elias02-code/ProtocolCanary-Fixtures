@@ -98,6 +98,27 @@ source_reference = "CAP-0083"          # optional, should be authoritative
 # source_account/contract_id/function/[expect]).
 ```
 
+### Category values in use
+
+`category` is free-text, but a consistent vocabulary is what makes it
+useful for grouping. The values currently in use across this repository's
+fixtures are:
+
+| `category` | Meaning |
+|---|---|
+| `cap-0083` | CAP-0083 (`StellarValue` `STELLAR_VALUE_EMPTY_TX_SET`) behavior. |
+| `cap-0085` | CAP-0085 (`ContractExecutable` external refs) behavior. |
+| `network` | Live-network RPC identity/behavior checks. |
+| `smoke` | General surface-level smoke tests, not tied to a single CAP. |
+
+Prefer a CAP slug (`cap-NNNN`) for protocol-specific fixtures and a short
+topic word (`network`, `smoke`) for cross-cutting ones. Avoid the vague
+values `misc`/`other`/`test`/`general`, which the validator rejects.
+
+**Keep this list up to date** whenever a fixture introduces a new
+`category` value, so contributors can see the established convention
+without grepping the corpus.
+
 ### Assertion vocabulary
 
 Each surface states its expected result through a small set of `kind`

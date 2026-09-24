@@ -165,7 +165,7 @@ stellar-canary check --fixtures-dir <checkout-of-this-repo>/protocol-28 --json
 stellar-canary check --fixtures-dir <checkout-of-this-repo> --protocol 28 --json
 ```
 
-Both were run and passed 5/5 against a local `Protocol-Canary` build on
+Both were run and passed 6/6 against a local `Protocol-Canary` build on
 2026-09-02, confirming this pack is consumable exactly as documented in
 `Protocol-Canary`'s `docs/fixture-contract.md`.
 

@@ -249,6 +249,16 @@ def validate_soroban_body(fx: Fixture, report: Report) -> None:
     _require(data, "function", str, path, report)
     _require(data, "sequence_number", int, path, report)
 
+    # 'args' is optional but, when present, must match the schema's
+    # "args": { "type": "array" } declaration (see
+    # schemas/fixture-v1.schema.json's soroban conditional).
+    if "args" in data and not isinstance(data["args"], list):
+        report.error(
+            path,
+            f"field 'args', if present, must be an array, "
+            f"got {type(data['args']).__name__}",
+        )
+
     if "expect" not in data:
         report.error(path, "missing required field 'expect'")
         return

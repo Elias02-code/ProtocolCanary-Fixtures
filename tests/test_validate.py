@@ -180,6 +180,29 @@ method = "get-network"
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("'expect'" in e for e in report.errors))
 
+    def test_rejects_non_array_args(self) -> None:
+        # schemas/fixture-v1.schema.json declares soroban "args" as
+        # { "type": "array" }; a non-array value must be reported here too.
+        for literal in ('"not-an-array"', "5"):
+            with self.subTest(args=literal):
+                bad = VALID_SOROBAN.replace(
+                    "sequence_number = 1",
+                    f"sequence_number = 1\nargs = {literal}",
+                )
+                report = self.run_validation({"a.toml": bad})
+                self.assertTrue(
+                    any("'args'" in e and "array" in e for e in report.errors),
+                    f"expected an 'args' array error for args = {literal}, "
+                    f"got: {report.errors}",
+                )
+
+    def test_accepts_array_args(self) -> None:
+        good = VALID_SOROBAN.replace(
+            "sequence_number = 1", 'sequence_number = 1\nargs = ["name"]'
+        )
+        report = self.run_validation({"a.toml": good})
+        self.assertEqual(report.errors, [])
+
     def test_rejects_invalid_base64_in_value_base64(self) -> None:
         bad = VALID_XDR.replace('value_base64 = "AAAAAA=="', 'value_base64 = "not-valid-base64!!!"')
         report = self.run_validation({"a.toml": bad})

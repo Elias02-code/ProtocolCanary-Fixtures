@@ -471,6 +471,28 @@ expected_type = "not-a-real-type"
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("'expect'" in e for e in report.errors))
 
+    def test_rejects_non_array_args(self) -> None:
+        # schemas/fixture-v1.schema.json declares soroban "args" as
+        # { "type": "array" }; a non-array value must be reported here too.
+        for literal in ('"not-an-array"', "5"):
+            with self.subTest(args=literal):
+                bad = VALID_SOROBAN.replace(
+                    "sequence_number = 1",
+                    f"sequence_number = 1\nargs = {literal}",
+                )
+                report = self.run_validation({"a.toml": bad})
+                self.assertTrue(
+                    any("'args'" in e and "array" in e for e in report.errors),
+                    f"expected an 'args' array error for args = {literal}, "
+                    f"got: {report.errors}",
+                )
+
+    def test_accepts_array_args(self) -> None:
+        good = VALID_SOROBAN.replace(
+            "sequence_number = 1", 'sequence_number = 1\nargs = ["name"]'
+        )
+        report = self.run_validation({"a.toml": good})
+        self.assertEqual(report.errors, [])
     def test_soroban_fixture_rejects_unknown_expect_kind(self) -> None:
         # [expect] is present but its kind is not in SOROBAN_EXPECT_KINDS —
         # a different branch of validate_soroban_body than the missing-

@@ -54,5 +54,6 @@ jobs:
             --no-progress
             --max-retries 2
             --accept 200,206,429
+            --exclude 'https://www\.contributor-covenant\.org/.*'
             './**/*.md'
           fail: true

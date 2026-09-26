@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATE_PATH = REPO_ROOT / "tools" / "validate" / "validate.py"
@@ -84,6 +85,12 @@ class ValidatorTests(unittest.TestCase):
                 write(root, name, contents)
             return validate.validate_directory(root)
 
+    def test_empty_directory_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = validate.validate_directory(Path(tmp))
+        self.assertEqual(report.errors, [])
+        self.assertTrue(report.ok)
+
     def test_accepts_a_valid_xdr_fixture(self) -> None:
         report = self.run_validation({"a.toml": VALID_XDR})
         self.assertEqual(report.errors, [])
@@ -132,6 +139,46 @@ class ValidatorTests(unittest.TestCase):
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("'surface'" in e for e in report.errors))
 
+    def test_error_message_includes_fixture_id(self) -> None:
+        # A fixture whose id has been parsed and is valid should be nameable
+        # from the reported error alone, so a failing CI run does not require
+        # cross-referencing the path against the file's contents.
+        bad = VALID_XDR.replace('surface = "xdr"', 'surface = "wallet"')
+        report = self.run_validation({"a.toml": bad})
+        matching = [e for e in report.errors if "'surface'" in e]
+        self.assertTrue(matching, report.errors)
+        self.assertTrue(
+            all("p28-xdr-cap83-example" in e for e in matching), matching
+        )
+        # The id must be an annotation on the message, not a replacement for
+        # the path that locates the offending file.
+        self.assertTrue(all("a.toml" in e for e in matching), matching)
+
+    def test_error_message_omits_id_when_id_is_invalid(self) -> None:
+        # When id itself fails validation (here: it is not lowercase), it is
+        # not yet known to be valid, so messages for that fixture fall back to
+        # the path-only format rather than echoing an invalid id.
+        bad = VALID_XDR.replace(
+            'id = "p28-xdr-cap83-example"', 'id = "P28-XDR-CAP83-EXAMPLE"'
+        ).replace('surface = "xdr"', 'surface = "wallet"')
+        report = self.run_validation({"a.toml": bad})
+        matching = [e for e in report.errors if "'surface'" in e]
+        self.assertTrue(matching, report.errors)
+        self.assertTrue(
+            all("P28-XDR-CAP83-EXAMPLE" not in e for e in matching), matching
+        )
+
+    def test_warning_message_includes_fixture_id(self) -> None:
+        # Report.warning shares Report.error's formatting, so a warning about a
+        # fixture with a known id is annotated the same way.
+        report = validate.Report()
+        path = Path("a.toml")
+        report.register_fixture_id(path, "p28-xdr-cap83-example")
+        report.warning(path, "an advisory")
+        self.assertEqual(
+            report.warnings, ["a.toml [p28-xdr-cap83-example]: an advisory"]
+        )
+
     def test_rejects_invalid_protocol_type(self) -> None:
         bad = VALID_XDR.replace("protocol = 28", 'protocol = "28"')
         report = self.run_validation({"a.toml": bad})
@@ -177,11 +224,35 @@ class ValidatorTests(unittest.TestCase):
         report = self.run_validation({"a.toml": bad})
         self.assertTrue(any("source_reference" in e for e in report.errors))
 
-    def test_warns_on_missing_source_reference(self) -> None:
+    def test_errors_on_missing_source_reference(self) -> None:
+        # Every fixture must cite an authoritative upstream source (see
+        # CONTRIBUTING.md and SECURITY.md). A missing source_reference is a
+        # hard validation error, not a warning, so it must fail the build
+        # rather than pass with a printed advisory.
         bad = VALID_XDR.replace('source_reference = "CAP-0083"\n', "")
         report = self.run_validation({"a.toml": bad})
-        self.assertEqual(report.errors, [])
-        self.assertTrue(any("source_reference" in w for w in report.warnings))
+        self.assertTrue(
+            any(
+                "source_reference" in e
+                and "authoritative upstream source" in e
+                and "CAP-0083" in e
+                for e in report.errors
+            ),
+            report.errors,
+        )
+        # It must be reported as an error only, never downgraded to a warning.
+        self.assertFalse(
+            any("source_reference" in w for w in report.warnings),
+            report.warnings,
+        )
+
+    def test_accepts_a_present_source_reference(self) -> None:
+        # The pass case for the rule above: a fixture that cites an
+        # authoritative source produces no source_reference error.
+        report = self.run_validation({"a.toml": VALID_XDR})
+        self.assertFalse(
+            any("source_reference" in e for e in report.errors), report.errors
+        )
 
     def test_rejects_malformed_toml(self) -> None:
         report = self.run_validation({"a.toml": "not valid [[[ toml"})
@@ -307,7 +378,14 @@ method = "get-network"
 
 
 class QuietFlagTests(unittest.TestCase):
-    """`--quiet` suppresses warnings while keeping errors and the summary."""
+    """`--quiet` suppresses warnings while keeping errors and the summary.
+
+    A missing ``source_reference`` is now an error rather than a warning, so
+    no built-in validator rule currently emits a warning. To keep the flag's
+    suppression path covered, these tests inject a warning into the report
+    returned for the temporary root. Errors are produced by a real invalid
+    fixture, so both halves of the flag's behavior are exercised together.
+    """
 
     def run_main(self, argv: list[str]) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
@@ -315,20 +393,28 @@ class QuietFlagTests(unittest.TestCase):
             code = validate.main(argv)
         return code, out.getvalue(), err.getvalue()
 
-    def write_warning_fixture(self, root: Path) -> None:
-        # Valid fixture that omits source_reference -> warning only.
-        write(root, "warn.toml", VALID_XDR.replace('source_reference = "CAP-0083"\n', ""))
-
     def write_error_fixture(self, root: Path) -> None:
         # Invalid surface -> error only (source_reference is still present).
         write(root, "error.toml", VALID_XDR.replace('surface = "xdr"', 'surface = "wallet"'))
 
+    def with_injected_warning(self):
+        # Wrap the real validate_directory so the report it returns also carries
+        # a warning, giving --quiet something to suppress.
+        real = validate.validate_directory
+
+        def wrapper(root: Path) -> "validate.Report":
+            report = real(root)
+            report.warning(Path(root) / "injected.toml", "injected warning")
+            return report
+
+        return mock.patch.object(validate, "validate_directory", side_effect=wrapper)
+
     def test_default_prints_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.write_warning_fixture(root)
             self.write_error_fixture(root)
-            code, out, err = self.run_main([str(root)])
+            with self.with_injected_warning():
+                code, out, err = self.run_main([str(root)])
         self.assertIn("warning:", out)
         self.assertIn("error:", err)
         self.assertEqual(code, 1)
@@ -336,9 +422,9 @@ class QuietFlagTests(unittest.TestCase):
     def test_quiet_suppresses_warnings_but_keeps_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.write_warning_fixture(root)
             self.write_error_fixture(root)
-            code, out, err = self.run_main(["--quiet", str(root)])
+            with self.with_injected_warning():
+                code, out, err = self.run_main(["--quiet", str(root)])
         self.assertNotIn("warning:", out)
         self.assertIn("error:", err)
         self.assertEqual(code, 1)
@@ -346,8 +432,9 @@ class QuietFlagTests(unittest.TestCase):
     def test_quiet_keeps_ok_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.write_warning_fixture(root)
-            code, out, err = self.run_main(["--quiet", str(root)])
+            write(root, "ok.toml", VALID_XDR)
+            with self.with_injected_warning():
+                code, out, err = self.run_main(["--quiet", str(root)])
         self.assertNotIn("warning:", out)
         self.assertIn("OK:", out)
         self.assertEqual(code, 0)
